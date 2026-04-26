@@ -1,61 +1,29 @@
 ---
-title: 你好，世界
+title: Welcome to MoZhu_Blog
 date: 2026-04-25
-excerpt: 这是博客的第一篇文章，也是一次关于为什么开始写作的自我确认。
+excerpt: A sample post that shows the minimum frontmatter required by the static blog build pipeline.
 group: notes
 tags:
-  - writing
-  - blog
-notionId: 34e9c346-4cea-8196-acb8-e9450720003f
+  - sample
+  - mozhu-blog
 ---
 
-这是第一篇文章。
+Welcome to this sample blog repository.
 
-写博客这件事，我思考了很久。不是不知道写什么，而是不确定"写"本身是否有意义——在这个信息过载的年代，再多一篇文章，有人读吗？
+This post exists so the project can be cloned, built, and previewed without requiring an immediate Notion sync.
 
-后来想通了一件事：写作首先是写给自己的。
+## What this post demonstrates
 
-## 为什么写
+- Required frontmatter fields
+- Markdown rendering
+- Static post loading from `posts/`
+- Participation in `posts.json` and `feed.xml`
 
-写作是一种思考的延伸。当你把想法落成文字，思路才真正清晰起来。
+## Next step
 
-很多念头在脑子里的时候感觉完整、有说服力，但一旦开始写，就会发现漏洞、矛盾、未经检验的假设。写作强迫你把模糊的直觉变成具体的句子——这个过程本身就有价值。
+Replace this file with your own content, or run the Notion sync script after configuring environment variables.
 
-> 没有被写下来的想法，就像没有被种下的种子。
-
-## 写什么
-
-没有固定计划。大概会写：
-
-- 技术上遇到的有意思的问题
-- 读书之后的零散想法
-- 一些关于如何做事的思考
-- 偶尔的生活记录
-
-不追求完整，不追求系统，就是写。
-
-## 一段代码，作为开始
-
-```javascript
-function start() {
-  const fear = "没人看";
-  const truth = "写给自己";
-
-  // 当你不再为了别人写，写作才真正开始
-  return truth > fear ? "开始" : "等待";
-}
-
-console.log(start()); // "开始"
+```bash
+npm run sync:notion
+npm run build
 ```
-
-这段代码没什么实际用途，但它说明了一件事：有时候你需要自己说服自己。
-
-## 保持更新
-
-我不会承诺更新频率。生活里有太多不确定的事，强行维持一个 schedule 往往会让写作变成任务，而不是乐趣。
-
-但我会写。
-
----
-
-你好，世界。

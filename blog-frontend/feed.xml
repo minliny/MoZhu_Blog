@@ -1,24 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
-    <title>小盖</title>
+    <title>MoZhu_Blog</title>
     <link>./</link>
-    <description>做有意思的事情</description>
+    <description>MoZhu_Blog is a Notion-powered static blog project.</description>
     <language>zh-CN</language>
     <lastBuildDate>Sun, 26 Apr 2026 00:00:00 GMT</lastBuildDate>
     <item>
-      <title>做有意思的事情</title>
-      <link>post.html?slug=doing-interesting-things</link>
-      <guid>post.html?slug=doing-interesting-things</guid>
+      <title>Notion Publishing Workflow</title>
+      <link>post.html?slug=notion-publishing-workflow</link>
+      <guid>post.html?slug=notion-publishing-workflow</guid>
       <pubDate>Sun, 26 Apr 2026 00:00:00 GMT</pubDate>
-      <description>有意思的事情，往往不是最有用的事情，而是你会忍不住继续做下去的事情。</description>
+      <description>A sample article that explains how content moves from Notion into the generated static site.</description>
     </item>
     <item>
-      <title>你好，世界</title>
+      <title>Welcome to MoZhu_Blog</title>
       <link>post.html?slug=hello-world</link>
       <guid>post.html?slug=hello-world</guid>
       <pubDate>Sat, 25 Apr 2026 00:00:00 GMT</pubDate>
-      <description>这是博客的第一篇文章，也是一次关于为什么开始写作的自我确认。</description>
+      <description>A sample post that shows the minimum frontmatter required by the static blog build pipeline.</description>
     </item>
   </channel>
 </rss>

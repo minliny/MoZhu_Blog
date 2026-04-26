@@ -9,8 +9,29 @@ blog-frontend/.render-*.html
 
 # Local logs
 *.log
+logs/
 
 # Blog local environment and dependencies
+.env
+.env.*
+!.env.example
+!**/.env.example
 blog-frontend/.env
 blog-frontend/.env.local
+node_modules/
 blog-frontend/node_modules/
+
+# Build artifacts
+dist/
+build/
+coverage/
+.cache/
+.next/
+out/
+tmp/
+temp/
+
+# Local config / cache
+config.local.*
+secrets.json
+notion-cache.json

@@ -8,10 +8,10 @@
   const aboutContent = {
     title: '关于',
     paragraphs: [
-      '这里是小盖的个人博客，用来记录那些想继续做下去的事情。',
-      '如果你想联系我，可以通过邮箱找到我：',
+      '这是一个基于 Notion 作为内容源的静态博客模板。',
+      '你可以把这里替换成自己的站点介绍、作者信息或联系方式。',
     ],
-    email: 'gainubi@gmail.com',
+    email: 'your-email@example.com',
   };
 
   function renderAboutContent(selector = '.about-content') {
