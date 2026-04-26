@@ -3,37 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="文章详情">
-  <title>文章 · 小盖</title>
+  <meta name="description" content="关于小盖">
+  <title>关于 · 小盖</title>
 
-  <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;400;600;700&family=Noto+Sans+SC:wght@300;400&family=Fragment+Mono:ital@0;1&display=swap" rel="stylesheet">
-
-  <!-- Highlight.js theme — follows light/dark theme family -->
-  <link id="hljs-theme" rel="stylesheet"
-    href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-
   <link rel="stylesheet" href="style.css?v=20260426-theme9">
 </head>
 <body>
   <div class="page">
     <article>
-      <div class="post-shell">
-        <h1 class="post-title" id="post-title">
-          <span class="loading">加载中…</span>
-        </h1>
-        <div class="post-meta" id="post-meta"></div>
-        <div class="post-content" id="post-content"></div>
-      </div>
+      <div class="post-shell about-content"></div>
     </article>
   </div>
-
-  <!-- marked.js for Markdown rendering -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
-  <!-- highlight.js for code syntax highlighting -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="chrome/background.js?v=20260426-theme9"></script>
   <script src="chrome/header.js?v=20260426-theme9"></script>
   <script src="chrome/footer.js?v=20260426-theme9"></script>
@@ -41,6 +24,12 @@
   <script src="chrome/about.js?v=20260426-theme9"></script>
   <script src="chrome/init.js?v=20260426-theme9"></script>
   <script src="theme.js?v=20260426-theme9"></script>
-  <script src="post.js?v=20260426-theme9"></script>
+  <script>
+    BlogChrome.initPage({
+      backLink: true,
+      footer: true,
+      about: true,
+    });
+  </script>
 </body>
 </html>
