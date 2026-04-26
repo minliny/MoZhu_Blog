@@ -4,6 +4,7 @@
   "private": true,
   "description": "Static blog frontend with Notion publishing sync",
   "scripts": {
+    "doctor:notion": "node scripts/notion-doctor.js",
     "sync:notion": "node scripts/sync-notion.js",
     "sync:notion:dry": "node scripts/sync-notion.js --dry-run",
     "generate:posts": "node scripts/generate-posts.js",

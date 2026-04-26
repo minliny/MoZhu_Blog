@@ -8,7 +8,7 @@
   const homeHeaderMarkup = `
   <header class="site-header">
     <a class="logo" href="index.html" aria-label="回到首页">
-      <span class="logo-letter">Blog</span>
+      <span class="logo-letter">Minliny</span>
       <span class="logo-hint">notion-powered static blog</span>
     </a>
     <p class="bio">Publish from Notion to a static site.</p>

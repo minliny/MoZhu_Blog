@@ -428,6 +428,7 @@ function describeRemoteSlugConflicts(conflicts) {
 function planWriteOperations(metas, localPosts) {
   const localByFileName = new Map(localPosts.map((post) => [post.name, post]));
   const errors = [];
+  const warnings = [];
   const operations = [];
 
   metas.forEach((meta) => {
@@ -446,7 +447,7 @@ function planWriteOperations(metas, localPosts) {
     }
 
     if (!existing.notionId) {
-      errors.push(`Refusing to overwrite local manual post "${fileName}" because it has no notionId.`);
+      warnings.push(`Skipping Notion page "${meta.title}" because local manual post "${fileName}" has no notionId.`);
       return;
     }
 
@@ -466,7 +467,7 @@ function planWriteOperations(metas, localPosts) {
     });
   });
 
-  return { operations, errors };
+  return { operations, errors, warnings };
 }
 
 function planRenameOperations(metas, localPosts) {
@@ -630,10 +631,13 @@ async function main() {
   const localPosts = readLocalPostFiles();
   const plannedRenames = planRenameOperations(metas, localPosts);
   const localPostsAfterRename = applyRenamePlanToLocalPosts(localPosts, plannedRenames);
-  const { operations: plannedWrites, errors: planningErrors } = planWriteOperations(metas, localPostsAfterRename);
+  const { operations: plannedWrites, errors: planningErrors, warnings: planningWarnings } = planWriteOperations(metas, localPostsAfterRename);
   if (planningErrors.length > 0) {
     fail(planningErrors.join('\n'));
   }
+  planningWarnings.forEach((warning) => {
+    console.warn(warning);
+  });
 
   const publishedNotionIds = new Set(metas.map((meta) => meta.notionId));
   const plannedDeletes = DELETE_NOTION_MANAGED

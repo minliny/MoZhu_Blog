@@ -24,6 +24,7 @@ jobs:
     env:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+      ALLOW_EMPTY_NOTION_SYNC: "1"
 
     steps:
       - name: Checkout
@@ -47,6 +48,9 @@ jobs:
           else
             echo "SITE_URL=https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" >> "$GITHUB_ENV"
           fi
+
+      - name: Diagnose Notion connection
+        run: npm run doctor:notion
 
       - name: Sync Notion posts
         run: npm run sync:notion

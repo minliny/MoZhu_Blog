@@ -12,7 +12,7 @@
       '你可以把这里替换成自己的站点介绍、作者信息或联系方式。',
       '这个项目已经开源，如果你想查看源码或基于它继续定制，可以访问下面的仓库链接。',
     ],
-    email: 'your-email@example.com',
+    email: 'wsf430mike@gmail.com',
     repository: 'https://github.com/minliny/MoZhu_Blog',
   };
 
