@@ -10,7 +10,6 @@
     <div class="footer-label">Connect</div>
     <div class="links-connect">
       <a href="feed.xml">RSS</a>
-      <a href="https://github.com/minliny/MoZhu_Blog" target="_blank" rel="noopener noreferrer">Open Source</a>
       <a href="mailto:your-email@example.com">邮箱</a>
       <a href="about.html">关于</a>
     </div>
