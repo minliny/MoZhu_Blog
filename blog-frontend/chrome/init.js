@@ -23,6 +23,9 @@
     if (shouldMountChrome) {
       mountChrome();
     }
+    if (global.BlogTheme) {
+      registry.nav?.initThemeToggle();
+    }
     if (homeHeader) {
       registry.header?.mountHomeHeader();
     }

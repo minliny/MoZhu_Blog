@@ -1,52 +1,13 @@
-/* ==========================================
-   Theme Management
-   4 themes in fixed order:
-   day       = 日间墨竹
-   night     = 夜间墨竹
-   day-pure  = 日间普通
-   night-pure= 夜间普通
-========================================== */
-
-const THEME_KEY = 'xiaogai-theme';
-const VALID_THEMES = new Set(['day', 'night', 'day-pure', 'night-pure']);
 const GROUP_LABELS = {
   tech: 'Tech',
   notes: 'Notes',
   life: 'Life',
 };
 
-function normalizeTheme(mode) {
-  return VALID_THEMES.has(mode) ? mode : 'day';
-}
-
-function applyTheme(mode) {
-  const theme = normalizeTheme(mode);
-  document.body.classList.remove('day', 'night', 'day-pure', 'night-pure');
-  document.body.classList.add(theme);
-
-  localStorage.setItem(THEME_KEY, theme);
-
-  document.querySelectorAll('.mode-btn').forEach(btn => {
-    btn.classList.toggle('is-active', btn.dataset.mode === theme);
-  });
-}
-
-document.querySelectorAll('.mode-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    applyTheme(btn.dataset.mode);
-    // 竹叶点击弹跳动画
-    btn.classList.remove('leaf-spring');
-    void btn.offsetWidth; // 强制 reflow，重启动画
-    btn.classList.add('leaf-spring');
-  });
-  btn.addEventListener('animationend', (e) => {
-    if (e.animationName === 'leafSpring') btn.classList.remove('leaf-spring');
-  });
+BlogChrome.initPage({
+  homeHeader: true,
+  footer: true,
 });
-
-// Default theme: 日间墨竹
-const savedTheme = normalizeTheme(localStorage.getItem(THEME_KEY) || 'day');
-applyTheme(savedTheme);
 
 /* ==========================================
    Posts Loader

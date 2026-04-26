@@ -4,6 +4,7 @@
 
 (function initChromeNav(global) {
   const registry = global.BlogChromeRegistry || (global.BlogChromeRegistry = {});
+  let themeToggleUnsubscribe = null;
 
   const modeMarkup = `
   <nav class="mode-indicator" aria-label="主题切换">
@@ -66,6 +67,43 @@
     document.body.insertAdjacentHTML('afterbegin', modeMarkup);
   }
 
+  function syncThemeControls(theme) {
+    document.querySelectorAll('.mode-btn').forEach((button) => {
+      button.classList.toggle('is-active', button.dataset.mode === theme);
+    });
+  }
+
+  function initThemeToggle() {
+    if (themeToggleUnsubscribe) {
+      themeToggleUnsubscribe();
+      themeToggleUnsubscribe = null;
+    }
+
+    document.querySelectorAll('.mode-btn').forEach((button) => {
+      if (!button.dataset.themeBound) {
+        button.dataset.themeBound = 'true';
+        button.addEventListener('click', () => {
+          global.BlogTheme?.setTheme(button.dataset.mode);
+          button.classList.remove('leaf-spring');
+          void button.offsetWidth;
+          button.classList.add('leaf-spring');
+        });
+        button.addEventListener('animationend', (event) => {
+          if (event.animationName === 'leafSpring') {
+            button.classList.remove('leaf-spring');
+          }
+        });
+      }
+    });
+
+    if (global.BlogTheme?.onThemeChange) {
+      themeToggleUnsubscribe = global.BlogTheme.onThemeChange((theme) => {
+        syncThemeControls(theme);
+      });
+      syncThemeControls(global.BlogTheme.getTheme());
+    }
+  }
+
   function mountBackLink(selector = '.page') {
     if (document.querySelector('.post-back')) {
       return;
@@ -81,6 +119,7 @@
 
   registry.nav = {
     mountThemeToggle,
+    initThemeToggle,
     mountBackLink,
   };
 })(window);

@@ -1,58 +1,21 @@
-/* ==========================================
-   Theme Management (mirrors app.js)
-   day       = 日间墨竹
-   night     = 夜间墨竹
-   day-pure  = 日间普通
-   night-pure= 夜间普通
-========================================== */
-
-const THEME_KEY = 'xiaogai-theme';
 const hljsTheme = document.getElementById('hljs-theme');
 
 const HLJS_DARK  = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css';
 const HLJS_LIGHT = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css';
-
-const VALID_THEMES = new Set(['day', 'night', 'day-pure', 'night-pure']);
 const LIGHT_MODES = new Set(['day', 'day-pure']);
 
-function normalizeTheme(mode) {
-  return VALID_THEMES.has(mode) ? mode : 'day';
-}
-
-function applyTheme(mode) {
-  const theme = normalizeTheme(mode);
-  document.body.classList.remove('day', 'night', 'day-pure', 'night-pure');
-  document.body.classList.add(theme);
-
-  // highlight.js follows light/dark theme family
-  hljsTheme.href = LIGHT_MODES.has(theme) ? HLJS_LIGHT : HLJS_DARK;
-
-  localStorage.setItem(THEME_KEY, theme);
-
-  document.querySelectorAll('.mode-btn').forEach(btn => {
-    btn.classList.toggle('is-active', btn.dataset.mode === theme);
-  });
-}
-
-document.querySelectorAll('.mode-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    applyTheme(btn.dataset.mode);
-    // Re-highlight after theme swap
-    document.querySelectorAll('.post-content pre code').forEach(block => {
-      hljs.highlightElement(block);
-    });
-    // 竹叶点击弹跳动画
-    btn.classList.remove('leaf-spring');
-    void btn.offsetWidth;
-    btn.classList.add('leaf-spring');
-  });
-  btn.addEventListener('animationend', (e) => {
-    if (e.animationName === 'leafSpring') btn.classList.remove('leaf-spring');
-  });
+BlogChrome.initPage({
+  backLink: true,
+  footer: true,
+  themeOptions: {
+    onApply(theme) {
+      hljsTheme.href = LIGHT_MODES.has(theme) ? HLJS_LIGHT : HLJS_DARK;
+      document.querySelectorAll('.post-content pre code').forEach((block) => {
+        hljs.highlightElement(block);
+      });
+    },
+  },
 });
-
-const savedTheme = normalizeTheme(localStorage.getItem(THEME_KEY) || 'day');
-  applyTheme(savedTheme);
 
 /* ==========================================
    Markdown Renderer Setup
@@ -64,6 +27,10 @@ function escapeAttribute(value) {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function stripFrontmatter(markdown) {
+  return markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
 }
 
 function setupMarked() {
@@ -182,7 +149,7 @@ async function loadPost() {
 
     const posts = metaRes.ok ? await metaRes.json() : [];
     const meta = posts.find(p => p.slug === slug);
-    const md = await mdRes.text();
+    const md = stripFrontmatter(await mdRes.text());
 
     // Page title
     const title = meta ? meta.title : slug;
