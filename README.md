@@ -5,7 +5,10 @@
 ## 项目链接
 
 - [minliny/MoZhu_Blog](https://github.com/minliny/MoZhu_Blog)
-- [在线访问](https://minliny.github.io/MoZhu_Blog)
+
+## 项目截图
+
+![MoZhu_Blog 首页截图](assets/screenshots/homepage.png)
 
 ## 适用场景
 
