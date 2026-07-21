@@ -4,7 +4,8 @@
 
 (function initBlogTheme(global) {
   const THEMES = ['day', 'night', 'day-pure', 'night-pure'];
-  const THEME_KEY = 'xiaogai-theme';
+  const THEME_KEY = 'mozhu-theme';
+  const LEGACY_THEME_KEYS = ['xiaogai-theme'];
   const listeners = new Set();
   let currentTheme = null;
   let themeHookUnsubscribe = null;
@@ -15,8 +16,27 @@
 
   function syncThemeControls(theme) {
     document.querySelectorAll('.mode-btn').forEach((button) => {
-      button.classList.toggle('is-active', button.dataset.mode === theme);
+      const active = button.dataset.mode === theme;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
     });
+  }
+
+  function readStoredTheme() {
+    try {
+      const current = localStorage.getItem(THEME_KEY);
+      if (THEMES.includes(current)) return current;
+      for (const key of LEGACY_THEME_KEYS) {
+        const legacy = localStorage.getItem(key);
+        if (THEMES.includes(legacy)) {
+          localStorage.setItem(THEME_KEY, legacy);
+          return legacy;
+        }
+      }
+    } catch (error) {
+      console.warn('[theme] storage unavailable', error);
+    }
+    return 'day';
   }
 
   function emitThemeChange(theme, previousTheme) {
@@ -33,7 +53,11 @@
     const theme = normalizeTheme(mode);
     document.body.classList.remove(...THEMES);
     document.body.classList.add(theme);
-    localStorage.setItem(THEME_KEY, theme);
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch (error) {
+      console.warn('[theme] could not persist preference', error);
+    }
     syncThemeControls(theme);
     return theme;
   }
@@ -52,7 +76,7 @@
   }
 
   function getTheme() {
-    return normalizeTheme(currentTheme || localStorage.getItem(THEME_KEY) || 'day');
+    return normalizeTheme(currentTheme || readStoredTheme());
   }
 
   function onThemeChange(listener) {
@@ -88,6 +112,7 @@
     offThemeChange,
     applyTheme,
     THEME_KEY,
+    LEGACY_THEME_KEYS,
     THEMES,
   };
 })(window);

@@ -56,9 +56,6 @@
     </button>
   </nav>`;
 
-  const backLinkMarkup = `
-  <a class="post-back" href="index.html">← 返回</a>`;
-
   function mountThemeToggle() {
     if (document.querySelector('.mode-indicator')) {
       return;
@@ -69,7 +66,9 @@
 
   function syncThemeControls(theme) {
     document.querySelectorAll('.mode-btn').forEach((button) => {
-      button.classList.toggle('is-active', button.dataset.mode === theme);
+      const active = button.dataset.mode === theme;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
     });
   }
 
@@ -84,9 +83,11 @@
         button.dataset.themeBound = 'true';
         button.addEventListener('click', () => {
           global.BlogTheme?.setTheme(button.dataset.mode);
-          button.classList.remove('leaf-spring');
-          void button.offsetWidth;
-          button.classList.add('leaf-spring');
+          if (!global.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            button.classList.remove('leaf-spring');
+            void button.offsetWidth;
+            button.classList.add('leaf-spring');
+          }
         });
         button.addEventListener('animationend', (event) => {
           if (event.animationName === 'leafSpring') {
@@ -104,22 +105,8 @@
     }
   }
 
-  function mountBackLink(selector = '.page') {
-    if (document.querySelector('.post-back')) {
-      return;
-    }
-
-    const container = document.querySelector(selector);
-    if (!container) {
-      return;
-    }
-
-    container.insertAdjacentHTML('afterbegin', backLinkMarkup);
-  }
-
   registry.nav = {
     mountThemeToggle,
     initThemeToggle,
-    mountBackLink,
   };
 })(window);

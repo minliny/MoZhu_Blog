@@ -5,7 +5,7 @@
 - Node.js 20 或更高版本
 - npm 10 或更高版本
 - 一个可访问目标数据库的 Notion Integration
-- 一个包含本文档约定字段的 Notion 数据库
+- 一个包含标题字段和 `Status` select 字段的 Notion 数据库
 
 ## 安装步骤
 
@@ -26,7 +26,8 @@ cp .env.example .env
 ```bash
 cd blog-frontend
 npm run sync:notion:dry
-npm run build
+npm run build:notion
+npm run validate
 npm run serve
 ```
 

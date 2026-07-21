@@ -1,11 +1,15 @@
 ---
+notionId: fixture-hello-world
 title: Welcome to MoZhu_Blog
 date: 2026-04-25
+updatedAt: 2026-04-25T00:00:00.000Z
 excerpt: A sample post that shows the minimum frontmatter required by the static blog build pipeline.
 group: notes
 tags:
   - sample
   - mozhu-blog
+cover: ""
+aliases: []
 ---
 
 Welcome to this sample blog repository.
@@ -15,15 +19,15 @@ This post exists so the project can be cloned, built, and previewed without requ
 ## What this post demonstrates
 
 - Required frontmatter fields
-- Markdown rendering
-- Static post loading from `posts/`
-- Participation in `posts.json` and `feed.xml`
+- Build-time Markdown rendering
+- A clean `dist/` publishing boundary
+- Participation in `posts.json`, RSS, and the sitemap
 
 ## Next step
 
-Replace this file with your own content, or run the Notion sync script after configuring environment variables.
+Use the fixtures for a template preview, or sync your own Notion database before building the production site.
 
 ```bash
-npm run sync:notion
-npm run build
+npm run build:fixtures
+npm run serve
 ```

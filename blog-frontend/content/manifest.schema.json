@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://minliny.github.io/MoZhu_Blog/schemas/content-manifest.schema.json",
+  "title": "MoZhu Blog Notion Content Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "source",
+    "generatedAt",
+    "count",
+    "mediaCount",
+    "articles",
+    "media"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "source": { "const": "notion" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "count": { "type": "integer", "minimum": 0 },
+    "mediaCount": { "type": "integer", "minimum": 0 },
+    "articles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "notionId", "slug", "aliases", "hash", "updatedAt", "path"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "notionId": { "type": "string", "minLength": 1 },
+          "slug": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+          "aliases": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+          },
+          "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "updatedAt": { "type": "string" },
+          "path": { "type": "string", "pattern": "^posts/[a-z0-9]+(?:-[a-z0-9]+)*\\.md$" }
+        }
+      }
+    },
+    "media": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "hash", "bytes", "contentType"],
+        "properties": {
+          "path": { "type": "string", "pattern": "^media/[a-f0-9]{64}\\.(?:avif|gif|jpg|png|webp)$" },
+          "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "bytes": { "type": "integer", "minimum": 0 },
+          "contentType": {
+            "enum": ["image/avif", "image/gif", "image/jpeg", "image/png", "image/webp"]
+          }
+        }
+      }
+    }
+  }
+}

@@ -171,6 +171,9 @@
     }
 
     document.body.insertAdjacentHTML('afterbegin', overlayMarkup);
+    if (global.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      document.querySelectorAll('#leaves-overlay animateTransform').forEach((animation) => animation.remove());
+    }
   }
 
   registry.background = {

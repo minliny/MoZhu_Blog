@@ -23,6 +23,7 @@ blog-frontend/node_modules/
 
 # Build artifacts
 dist/
+blog-frontend/.content/
 build/
 coverage/
 .cache/

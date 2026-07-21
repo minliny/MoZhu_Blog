@@ -7,14 +7,20 @@
     "doctor:notion": "node scripts/notion-doctor.js",
     "sync:notion": "node scripts/sync-notion.js",
     "sync:notion:dry": "node scripts/sync-notion.js --dry-run",
-    "generate:posts": "node scripts/generate-posts.js",
-    "generate:rss": "node scripts/generate-rss.js",
-    "build": "node scripts/build.js",
-    "serve": "python3 -m http.server 4321"
+    "build": "npm run build:fixtures",
+    "build:fixtures": "node scripts/build-site.js --content content/fixtures",
+    "build:notion": "node scripts/build-site.js --content .content/notion",
+    "validate": "node scripts/validate-dist.js",
+    "test": "node --test",
+    "check": "npm test && npm run build:fixtures && npm run validate",
+    "serve": "python3 -m http.server 4321 --directory dist"
   },
   "dependencies": {
     "@notionhq/client": "^2.2.15",
     "dotenv": "^16.4.5",
-    "gray-matter": "^4.0.3"
+    "gray-matter": "^4.0.3",
+    "highlight.js": "11.9.0",
+    "marked": "9.1.6",
+    "sanitize-html": "2.17.0"
   }
 }

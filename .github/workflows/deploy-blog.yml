@@ -2,75 +2,142 @@ name: Deploy Blog
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
+  repository_dispatch:
+    types: [notion_publish]
+  schedule:
+    - cron: '17,47 * * * *'
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
+  models: read
 
 concurrency:
-  group: pages
+  group: pages-${{ github.repository }}
   cancel-in-progress: true
 
 jobs:
   build:
+    if: github.event_name != 'schedule' || github.event.repository.name == format('{0}.github.io', github.repository_owner)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: blog-frontend
     env:
-      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-      NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
-      ALLOW_EMPTY_NOTION_SYNC: "0"
+      ALLOW_EMPTY_NOTION_SYNC: '0'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: blog-frontend/package-lock.json
 
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Derive site URL
+      - name: Select content source
+        id: content
+        shell: bash
         run: |
-          if [ "${{ github.event.repository.name }}" = "${{ github.repository_owner }}.github.io" ]; then
-            echo "SITE_URL=https://${{ github.repository_owner }}.github.io" >> "$GITHUB_ENV"
+          if [ "$GITHUB_REPOSITORY" = "${GITHUB_REPOSITORY_OWNER}/${GITHUB_REPOSITORY_OWNER}.github.io" ]; then
+            echo "mode=notion" >> "$GITHUB_OUTPUT"
           else
-            echo "SITE_URL=https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" >> "$GITHUB_ENV"
+            echo "mode=fixtures" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Derive site URL
+        shell: bash
+        run: |
+          if [ "$GITHUB_REPOSITORY" = "${GITHUB_REPOSITORY_OWNER}/${GITHUB_REPOSITORY_OWNER}.github.io" ]; then
+            echo "SITE_URL=https://${GITHUB_REPOSITORY_OWNER}.github.io" >> "$GITHUB_ENV"
+          else
+            echo "SITE_URL=https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}" >> "$GITHUB_ENV"
           fi
 
       - name: Diagnose Notion connection
+        if: steps.content.outputs.mode == 'notion'
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
         run: npm run doctor:notion
 
-      - name: Sync Notion posts
+      - name: Sync Notion snapshot
+        if: steps.content.outputs.mode == 'notion'
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          CONTENT_DIR: .content/notion
+          AI_SUMMARY_TOKEN: ${{ github.token }}
+          AI_SUMMARY_MODEL: openai/gpt-4.1-mini
+          AI_SUMMARY_WRITEBACK: '1'
         run: npm run sync:notion
 
-      - name: Build blog
-        run: npm run build
+      - name: Test content and build code
+        run: npm test
+
+      - name: Build Notion site
+        if: steps.content.outputs.mode == 'notion'
+        env:
+          CONTENT_DIR: .content/notion
+        run: npm run build:notion
+
+      - name: Build fixture site
+        if: steps.content.outputs.mode == 'fixtures'
+        run: npm run build:fixtures
+
+      - name: Validate publish artifact
+        run: npm run validate
+
+      - name: Upload immutable site snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: site-snapshot-${{ github.sha }}-${{ github.run_id }}
+          path: blog-frontend/dist
+          include-hidden-files: true
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
-          path: ./blog-frontend
+          path: blog-frontend/dist
 
   deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    needs: build
-    runs-on: ubuntu-latest
-
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+  smoke:
+    needs: deploy
+    if: needs.deploy.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check published home and manifest
+        env:
+          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
+        run: |
+          curl --fail --location --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 "$PAGE_URL"
+          curl --fail --location --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 "${PAGE_URL%/}/content-manifest.json"

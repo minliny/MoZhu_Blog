@@ -13,13 +13,14 @@
 
 当前流程：
 
-1. 推送到 `main` 分支
+1. 推送到 `main`，每 30 分钟定时检查，或由 `repository_dispatch` 触发
 2. 在 `blog-frontend/` 执行 `npm ci`
-3. 自动计算 `SITE_URL`
-4. 执行 `npm run sync:notion`
-5. 执行 `npm run build`
-6. 上传 `blog-frontend/` 目录为 Pages 构建产物
-7. 发布到 GitHub Pages
+3. 根据仓库名选择 Notion 或公开 fixtures 内容源
+4. Notion 模式生成 `.content/notion/` 无状态全量快照
+5. 空 Excerpt 通过 GitHub Models 生成摘要并写回 Notion 作为缓存
+6. 构建并校验 `blog-frontend/dist/`
+7. 只上传 `dist/` 为 Pages 构建产物，并保存不可变快照
+8. 发布后检查首页和 `content-manifest.json`
 
 ## 需要的 GitHub Secrets
 
@@ -31,6 +32,8 @@
 说明：
 
 - 当前 Pages 工作流不要求手动提供 `SITE_URL`，因为工作流会根据仓库名自动推导。
+- GitHub Models 使用 Actions 自带的 `github.token` 和 `models: read`，不需要新增 API Key Secret。
+- 只有 `minliny.github.io` 仓库读取 Notion Secrets；模板仓库使用 `content/fixtures`。
 - 不要把真实 Token 写入代码库或提交到 `.env.example`。
 - 对于当前仓库 `minliny/MoZhu_Blog`，工作流推导出的站点地址是 `https://minliny.github.io/MoZhu_Blog`
 

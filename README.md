@@ -19,19 +19,22 @@
 
 仓库当前实现位于 [blog-frontend](blog-frontend/)，核心流程是：
 
-1. 从 Notion 数据库读取 `Published` 文章
-2. 将正文转换为 Markdown 文件写入 `blog-frontend/posts/`
-3. 生成 `posts.json` 和 `feed.xml`
-4. 通过 GitHub Actions 发布到 GitHub Pages
+1. 从 Notion 数据库读取 `Published` 文章并校验统一内容契约
+2. 将正文、内容寻址媒体和 `manifest.json` 原子写入 `.content/notion/`
+3. 在构建期把 Markdown 转成安全 HTML、索引、RSS、sitemap 和历史 Slug 重定向
+4. 只把经过校验的 `blog-frontend/dist/` 发布到 GitHub Pages
 
 ## 核心功能
 
 - Notion 数据库驱动内容发布
 - 仅发布 `Status = Published` 的文章
 - `Draft` 状态文章不会进入静态站点
-- Notion 正文自动转换为 Markdown 正文
+- Notion 正文自动转换为 Markdown，并在构建期转成 HTML
+- Notion 图片和文件镜像到内容寻址的本地媒体目录
 - 生成文章索引 `posts.json`
 - 生成 RSS `feed.xml`
+- 生成 `content-manifest.json`、`sitemap.xml` 和历史 Slug 重定向
+- 构建产物包含 CSP、HTML 消毒、协议白名单和完整性校验
 - 通过 GitHub Actions 自动构建并部署到 GitHub Pages
 - 支持本地静态预览
 
@@ -72,53 +75,45 @@
 .
 ├── .github/workflows/deploy-blog.yml
 ├── blog-frontend/
-│   ├── about.html
-│   ├── index.html
-│   ├── post.html
-│   ├── scripts/
-│   │   ├── build.js
-│   │   ├── generate-posts.js
-│   │   ├── generate-rss.js
-│   │   └── sync-notion.js
-│   ├── posts/
-│   ├── posts.json
-│   └── feed.xml
+│   ├── content/fixtures/       # 模板预览内容，不是生产源
+│   ├── scripts/sync-notion.js  # 生成 .content/notion 全量快照
+│   ├── scripts/build-site.js   # 生成 dist/
+│   ├── runtime/                # 渐进增强（主题、复制、旧链接）
+│   ├── site.config.json
+│   └── dist/                   # 本地构建产物（不提交）
 ├── docs/
 └── examples/
 ```
 
-## Notion 数据库字段结构
+## Notion 发布方式
 
-当前项目要求 Notion 数据库包含以下字段：
+日常发布只需要标题、正文和发布状态。其他字段都是可选覆盖：
 
 | 字段名 | 类型 | 说明 |
 | --- | --- | --- |
-| 名称 | `title` | Notion 数据库默认标题字段 |
-| Slug | `rich_text` | URL 和文件名 |
-| Status | `select` | 发布状态 |
-| Date | `date` | 发布时间 |
-| Excerpt | `rich_text` | 摘要 |
-| Group | `select` | 分组 |
+| 名称 | `title` | 必填；文章标题 |
+| Status | `select` | 必填；设为 `Published` 时发布 |
+| Slug | `rich_text` | 可选；留空时根据 Notion 页面 ID 生成稳定 URL |
+| Date | `date` | 可选；留空时使用 Notion 页面创建日期 |
+| Excerpt | `rich_text` | 可选；留空时由 AI 理解正文后重写摘要 |
+| Group | `select` | 可选；留空时使用 `notes` |
 | Tags | `multi_select` | 标签 |
-| Cover | `url` | 封面 |
+| Cover | `url` 或 `files` | 封面 |
+| Aliases | `multi_select` 或 `rich_text` | 历史 Slug（可选） |
 
 ### Status 选项
 
 - `Draft`
 - `Published`
 
-### Group 选项
-
-- `tech`
-- `notes`
-- `life`
-
 ### 发布规则
 
-- `Slug` 推荐使用“日期 + 标题”的格式，例如 `2026-04-26-my-first-post`
 - `Draft` 不发布
 - `Published` 才发布
 - Notion 正文作为博客正文来源
+- 每 30 分钟自动检查一次 Notion 更新
+- 手工填写的 Slug、Date、Excerpt 和 Group 会优先于自动值
+- AI 摘要会写回 `Excerpt` 作为可编辑缓存；清空它即可要求重新生成
 
 更多字段说明见 [docs/notion-database.md](docs/notion-database.md)。
 
@@ -150,11 +145,19 @@ cd blog-frontend
 npm run sync:notion
 ```
 
-### 4. 生成静态产物
+### 4. 生成并校验静态产物
 
 ```bash
 cd blog-frontend
-npm run build
+npm run build:notion
+npm run validate
+```
+
+没有 Notion 凭据时可使用模板 fixtures：
+
+```bash
+npm run build:fixtures
+npm run validate
 ```
 
 ### 5. 本地运行
@@ -167,7 +170,7 @@ npm run serve
 默认访问地址：
 
 - `http://127.0.0.1:4321/index.html`
-- `http://127.0.0.1:4321/post.html?slug=hello-world`
+- `http://127.0.0.1:4321/posts/hello-world/`
 
 ## 环境变量说明
 
@@ -175,9 +178,16 @@ npm run serve
 | --- | --- | --- |
 | `NOTION_TOKEN` | 是 | Notion Integration Token |
 | `NOTION_DATABASE_ID` | 是 | Notion 数据库 ID |
-| `SITE_URL` | 是 | 站点公开访问地址，用于 RSS 和绝对链接；当前仓库可使用 `https://minliny.github.io/MoZhu_Blog` |
-| `ALLOW_EMPTY_NOTION_SYNC` | 否 | 设为 `1` 时允许数据库为空 |
-| `DISABLE_NOTION_SYNC_DELETE` | 否 | 设为 `1` 时禁止删除已不存在于 Notion 发布列表中的本地文章 |
+| `SITE_URL` | 否 | 站点公开访问地址，用于 RSS、sitemap 和 canonical；工作流会自动推导 |
+| `ALLOW_EMPTY_NOTION_SYNC` | 否 | 设为 `1` 时允许数据库为空（默认拒绝空快照） |
+| `CONTENT_DIR` | 否 | Notion 快照目录，默认 `.content/notion` |
+| `AI_SUMMARY_TOKEN` | 否 | 本地智能摘要所需 Token；Actions 自动使用 `github.token` |
+| `AI_SUMMARY_MODEL` | 否 | 摘要模型，默认 `openai/gpt-4.1-mini` |
+| `AI_SUMMARY_WRITEBACK` | 否 | 设为 `1` 时把生成结果写回 Notion `Excerpt` |
+| `STRICT_UNSUPPORTED_BLOCKS` | 否 | 高级严格模式；默认不因个别未支持 Block 阻止发布 |
+| `NOTION_MEDIA_MAX_BYTES` | 否 | 单个媒体文件大小上限，默认 15 MiB |
+| `NOTION_MEDIA_TIMEOUT_MS` | 否 | 媒体下载超时，默认 20 秒 |
+| `NOTION_GROUP_ALLOWLIST` | 否 | 允许的 Group，默认 `tech,notes,life` |
 | `GITHUB_TOKEN` | 否 | 仅在你自定义 GitHub API 调用时使用，当前 Actions Pages 部署流程不直接读取该值 |
 
 ## 本地运行方式
@@ -187,7 +197,8 @@ npm run serve
 ```bash
 cd blog-frontend
 npm run sync:notion
-npm run build
+npm run build:notion
+npm run validate
 npm run serve
 ```
 
@@ -204,12 +215,11 @@ npm run sync:notion:dry
 
 真实逻辑如下：
 
-1. 监听 `main` 分支 `push`
-2. 在 `blog-frontend/` 下执行 `npm ci`
-3. 自动推导 `SITE_URL`
-4. 运行 `npm run sync:notion`
-5. 运行 `npm run build`
-6. 将 `blog-frontend/` 作为 GitHub Pages 构建产物上传并部署
+1. `minliny.github.io` 仓库从 Notion 生成生产快照；模板仓库使用 `content/fixtures`
+2. 每 30 分钟检查一次，也支持 `workflow_dispatch` 和 `repository_dispatch`（`notion_publish`）
+3. 执行测试、构建、产物完整性校验
+4. 只上传 `blog-frontend/dist/`，同时保留带 Commit SHA 的 90 天快照
+5. 部署后通过 HTTP 检查首页和 `content-manifest.json`
 
 需要在 GitHub 仓库 Secrets 中配置：
 

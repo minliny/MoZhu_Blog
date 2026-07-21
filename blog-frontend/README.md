@@ -8,7 +8,8 @@
 npm install
 npm run sync:notion
 npm run sync:notion:dry
-npm run build
+npm run build:fixtures
+npm run validate
 npm run serve
 ```
 
@@ -26,8 +27,8 @@ npm run serve
 
 ## 目录说明
 
-- `scripts/sync-notion.js`: 从 Notion 同步文章到 `posts/`
-- `scripts/generate-posts.js`: 生成 `posts.json`
-- `scripts/generate-rss.js`: 生成 `feed.xml`
-- `scripts/build.js`: 串联构建流程
-- `posts/`: 本地 Markdown 文章
+- `scripts/sync-notion.js`: 生成 `.content/notion/` 全量内容快照
+- `scripts/build-site.js`: 将 fixtures 或 Notion 快照生成到 `dist/`
+- `scripts/validate-dist.js`: 检查文件、HTML、链接和内容 manifest
+- `content/fixtures/`: 无凭据本地预览用文章
+- `dist/`: 最终发布目录（本地生成，不提交）

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://minliny.github.io/MoZhu_Blog/schemas/article.schema.json",
+  "title": "MoZhu Blog Article Frontmatter",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "notionId",
+    "title",
+    "date",
+    "excerpt",
+    "group",
+    "tags",
+    "cover",
+    "aliases",
+    "updatedAt"
+  ],
+  "properties": {
+    "notionId": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "date": { "type": "string", "format": "date" },
+    "excerpt": { "type": "string", "minLength": 1 },
+    "group": { "type": "string", "minLength": 1 },
+    "tags": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+    "cover": { "type": "string" },
+    "aliases": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+    },
+    "updatedAt": { "type": "string" }
+  }
+}

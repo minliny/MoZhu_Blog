@@ -1,148 +1,196 @@
+'use strict';
+
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const matter = require('gray-matter');
 const dotenv = require('dotenv');
 const { Client } = require('@notionhq/client');
+const {
+  maskId,
+  parseGroupAllowlist,
+  validateDatabaseSchema,
+  validatePublishedPages,
+} = require('./content-schema');
 
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 const ROOT_DIR = path.resolve(__dirname, '..');
-const POSTS_DIR = path.join(ROOT_DIR, 'posts');
-const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const REQUIRED_ENV = ['NOTION_TOKEN', 'NOTION_DATABASE_ID', 'SITE_URL'];
-const REQUIRED_PROPERTIES = {
-  '名称': 'title',
-  Slug: 'rich_text',
-  Status: 'select',
-  Date: 'date',
-  Excerpt: 'rich_text',
-  Group: 'select',
-};
-
+const REQUIRED_ENV = ['NOTION_TOKEN', 'NOTION_DATABASE_ID'];
 const DRY_RUN = process.argv.includes('--dry-run');
 const ALLOW_EMPTY_SYNC = process.env.ALLOW_EMPTY_NOTION_SYNC === '1';
-const DELETE_NOTION_MANAGED = process.env.DISABLE_NOTION_SYNC_DELETE !== '1';
-const UNSUPPORTED_FALLBACK_TYPES = new Set([
-  'table',
-  'table_row',
-  'column_list',
-  'column',
-  'synced_block',
-  'equation',
-  'embed',
-  'pdf',
-  'file',
-  'audio',
-  'video',
+const STRICT_UNSUPPORTED_BLOCKS = process.env.STRICT_UNSUPPORTED_BLOCKS === '1';
+const AI_SUMMARY_MODEL = process.env.AI_SUMMARY_MODEL || 'openai/gpt-4.1-mini';
+const AI_SUMMARY_WRITEBACK = process.env.AI_SUMMARY_WRITEBACK === '1';
+const AI_SUMMARY_ENDPOINT = 'https://models.github.ai/inference/chat/completions';
+const AI_SUMMARY_SOURCE_LIMIT = 12_000;
+const MAX_MEDIA_BYTES = parsePositiveInteger(process.env.NOTION_MEDIA_MAX_BYTES, 15 * 1024 * 1024);
+const MEDIA_TIMEOUT_MS = parsePositiveInteger(process.env.NOTION_MEDIA_TIMEOUT_MS, 20_000);
+const LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+const MEDIA_PROTOCOLS = new Set(['http:', 'https:']);
+const IMAGE_EXTENSIONS = new Map([
+  ['image/avif', 'avif'],
+  ['image/gif', 'gif'],
+  ['image/jpeg', 'jpg'],
+  ['image/png', 'png'],
+  ['image/webp', 'webp'],
 ]);
 
-function fail(message) {
-  console.error(message);
-  process.exit(1);
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value || ''), 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function resolveContentDir(value = process.env.CONTENT_DIR) {
+  const resolved = value
+    ? path.resolve(ROOT_DIR, value)
+    : path.join(ROOT_DIR, '.content', 'notion');
+  const filesystemRoot = path.parse(resolved).root;
+  const relativeToProject = path.relative(ROOT_DIR, resolved);
+
+  if (
+    resolved === filesystemRoot
+    || resolved === ROOT_DIR
+    || relativeToProject.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativeToProject)
+  ) {
+    throw new Error(`Unsafe CONTENT_DIR: ${resolved}`);
+  }
+  return resolved;
 }
 
 function ensureEnv() {
   const missing = REQUIRED_ENV.filter((name) => !process.env[name]);
   if (missing.length > 0) {
-    fail(`Missing required environment variables: ${missing.join(', ')}`);
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
 }
 
-function formatDate(value) {
-  if (!value) return '';
-  if (value instanceof Date) {
-    return value.toISOString().slice(0, 10);
-  }
-
-  const stringValue = String(value).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(stringValue)) {
-    return stringValue;
-  }
-
-  const parsed = new Date(stringValue);
-  if (Number.isNaN(parsed.getTime())) {
-    throw new Error(`Invalid date value: ${value}`);
-  }
-
-  return parsed.toISOString().slice(0, 10);
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-function validateSlug(slug, pageId, title) {
-  if (!slug) {
-    throw new Error(`Missing slug for page ${pageId} (${title})`);
-  }
-
-  if (!SLUG_PATTERN.test(slug)) {
-    throw new Error(
-      `Invalid slug "${slug}" for page ${pageId} (${title}). Slugs must use lowercase letters, numbers, and hyphens only.`
-    );
-  }
+function yamlString(value) {
+  return JSON.stringify(String(value ?? ''));
 }
 
-function escapeYamlString(value) {
-  return String(value ?? '')
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"');
+function appendYamlArray(lines, name, values) {
+  if (!values || values.length === 0) {
+    lines.push(`${name}: []`);
+    return;
+  }
+  lines.push(`${name}:`);
+  values.forEach((value) => lines.push(`  - ${yamlString(value)}`));
 }
 
-function serializeFrontmatter(data) {
+function serializeFrontmatter(article) {
   const lines = [
     '---',
-    `title: "${escapeYamlString(data.title)}"`,
-    `date: "${escapeYamlString(data.date)}"`,
-    `excerpt: "${escapeYamlString(data.excerpt)}"`,
-    `group: "${escapeYamlString(data.group)}"`,
+    `notionId: ${yamlString(article.notionId)}`,
+    `title: ${yamlString(article.title)}`,
+    `date: ${yamlString(article.date)}`,
+    `excerpt: ${yamlString(article.excerpt)}`,
+    `group: ${yamlString(article.group)}`,
   ];
-
-  if (data.tags.length === 0) {
-    lines.push('tags: []');
-  } else {
-    lines.push('tags:');
-    data.tags.forEach((tag) => {
-      lines.push(`  - "${escapeYamlString(tag)}"`);
-    });
-  }
-
-  lines.push(`notionId: "${escapeYamlString(data.notionId)}"`);
-  if (data.cover) {
-    lines.push(`cover: "${escapeYamlString(data.cover)}"`);
-  }
-  lines.push('---', '');
+  appendYamlArray(lines, 'tags', article.tags);
+  lines.push(`cover: ${yamlString(article.cover || '')}`);
+  appendYamlArray(lines, 'aliases', article.aliases);
+  lines.push(`updatedAt: ${yamlString(article.updatedAt)}`, '---', '');
   return lines.join('\n');
 }
 
-function getPlainTextFromRichText(richText) {
-  return (richText || []).map((part) => part.plain_text || '').join('').trim();
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
-function richTextToMarkdown(richText) {
-  return (richText || [])
-    .map((item) => {
-      let text = item.plain_text || '';
-      const href = item.href || item.text?.link?.url;
+function escapeMarkdownText(value) {
+  return escapeHtml(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/([`*_[\]{}()#+.!|>-])/g, '\\$1');
+}
 
-      if (!text) return '';
-      if (item.annotations?.code) text = `\`${text}\``;
+function escapeImageAlt(value) {
+  return escapeHtml(value).replace(/\\/g, '\\\\').replace(/([\[\]])/g, '\\$1');
+}
+
+function inlineCode(value) {
+  const text = String(value ?? '');
+  const longestFence = Math.max(0, ...(text.match(/`+/g) || []).map((match) => match.length));
+  const fence = '`'.repeat(Math.max(1, longestFence + 1));
+  const padding = /^`|`$|^\s|\s$/.test(text) ? ' ' : '';
+  return `${fence}${padding}${text}${padding}${fence}`;
+}
+
+function codeFence(value) {
+  const text = String(value ?? '');
+  const longestFence = Math.max(0, ...(text.match(/`+/g) || []).map((match) => match.length));
+  return '`'.repeat(Math.max(3, longestFence + 1));
+}
+
+function sanitizeUrl(value, allowedProtocols, options = {}) {
+  const raw = String(value || '').trim();
+  if (!raw || /[\u0000-\u001f\u007f]/.test(raw)) return '';
+
+  if (options.allowRelative && (/^#/.test(raw) || /^(?:\.\.\/|\.\/|\/(?!\/))/.test(raw))) {
+    return raw;
+  }
+
+  try {
+    const parsed = new URL(raw);
+    return allowedProtocols.has(parsed.protocol) ? raw : '';
+  } catch (_error) {
+    return '';
+  }
+}
+
+function markdownDestination(url) {
+  const encoded = String(url).replace(/[<>\\\s]/g, (character) => encodeURIComponent(character));
+  return `<${encoded}>`;
+}
+
+function incrementCounter(counter, key) {
+  counter.set(key, (counter.get(key) || 0) + 1);
+}
+
+function plainTextFromRichText(richText) {
+  return (richText || []).map((item) => item.plain_text || '').join('');
+}
+
+function richTextToMarkdown(richText, context) {
+  return (richText || []).map((item) => {
+    const rawText = item.plain_text || '';
+    if (!rawText) return '';
+
+    let text = item.annotations?.code ? inlineCode(rawText) : escapeMarkdownText(rawText);
+    if (!item.annotations?.code) {
       if (item.annotations?.bold) text = `**${text}**`;
       if (item.annotations?.italic) text = `*${text}*`;
       if (item.annotations?.strikethrough) text = `~~${text}~~`;
-      if (href) text = `[${text}](${href})`;
+    }
 
-      return text;
-    })
-    .join('');
+    const href = item.href || item.text?.link?.url;
+    if (href) {
+      const safeHref = sanitizeUrl(href, LINK_PROTOCOLS, { allowRelative: true });
+      if (safeHref) {
+        text = `[${text}](${markdownDestination(safeHref)})`;
+      } else {
+        incrementCounter(context.unsafeUrlCounts, 'rich_text_link');
+      }
+    }
+    return text;
+  }).join('');
 }
 
 async function listAllResults(fetchPage) {
   let cursor;
   const results = [];
-
   do {
     const response = await fetchPage(cursor);
     results.push(...response.results);
     cursor = response.has_more ? response.next_cursor : undefined;
   } while (cursor);
-
   return results;
 }
 
@@ -151,17 +199,11 @@ async function fetchDatabasePages(client) {
     database_id: process.env.NOTION_DATABASE_ID,
     filter: {
       property: 'Status',
-      select: {
-        equals: 'Published',
-      },
+      select: { equals: 'Published' },
     },
-    sorts: [
-      {
-        property: 'Date',
-        direction: 'descending',
-      },
-    ],
+    sorts: [{ property: 'Date', direction: 'descending' }],
     start_cursor,
+    page_size: 100,
   }));
 }
 
@@ -169,519 +211,512 @@ async function fetchBlockChildren(client, blockId) {
   const children = await listAllResults((start_cursor) => client.blocks.children.list({
     block_id: blockId,
     start_cursor,
+    page_size: 100,
   }));
 
-  const nested = [];
   for (const child of children) {
     if (child.has_children) {
       child.children = await fetchBlockChildren(client, child.id);
     }
-    nested.push(child);
   }
-
-  return nested;
+  return children;
 }
 
-function getProperty(properties, name, expectedType, pageId) {
-  const property = properties[name];
-  if (!property) {
-    throw new Error(`Missing property "${name}" on page ${pageId}`);
-  }
-
-  if (property.type !== expectedType) {
-    throw new Error(`Property "${name}" on page ${pageId} must be type "${expectedType}", received "${property.type}"`);
-  }
-
-  return property;
-}
-
-function extractPageMeta(page) {
-  const properties = page.properties;
-
-  Object.entries(REQUIRED_PROPERTIES).forEach(([name, expectedType]) => {
-    getProperty(properties, name, expectedType, page.id);
-  });
-
-  const title = getPlainTextFromRichText(properties['名称'].title);
-  const slug = getPlainTextFromRichText(properties.Slug.rich_text);
-  const date = properties.Date.date?.start;
-  const excerpt = getPlainTextFromRichText(properties.Excerpt.rich_text);
-  const group = properties.Group.select?.name || '';
-  const tags = properties.Tags && properties.Tags.type === 'multi_select'
-    ? properties.Tags.multi_select.map((item) => item.name)
-    : [];
-  let cover = '';
-
-  if (properties.Cover?.type === 'url') {
-    cover = properties.Cover.url || '';
-  } else if (properties.Cover?.type === 'files') {
-    const firstFile = properties.Cover.files?.[0];
-    if (firstFile?.type === 'external') {
-      cover = firstFile.external.url || '';
-    } else if (firstFile?.type === 'file') {
-      cover = firstFile.file.url || '';
-    }
-  }
-
-  if (!title || !slug || !date || !excerpt || !group) {
-    throw new Error(`Page ${page.id} is missing one of the required values: title, slug, date, excerpt, group`);
-  }
-
-  validateSlug(slug, page.id, title);
-
+function createMediaStore() {
   return {
-    notionId: page.id,
-    title,
-    slug,
-    date: formatDate(date),
-    excerpt,
-    group,
-    tags,
-    cover,
+    files: new Map(),
+    bySourceUrl: new Map(),
   };
+}
+
+function imageSourceFromBlock(block) {
+  if (block.type !== 'image') return null;
+  if (block.image?.type === 'external' && block.image.external?.url) {
+    return { kind: 'external', url: block.image.external.url };
+  }
+  if (block.image?.type === 'file' && block.image.file?.url) {
+    return { kind: 'notion-file', url: block.image.file.url };
+  }
+  return null;
+}
+
+async function downloadNotionImage(url, mediaStore, options = {}) {
+  const sourceUrl = sanitizeUrl(url, MEDIA_PROTOCOLS);
+  if (!sourceUrl) throw new Error('Notion media URL does not use an allowed HTTP(S) protocol');
+  if (mediaStore.bySourceUrl.has(sourceUrl)) return mediaStore.bySourceUrl.get(sourceUrl);
+
+  const fetchImpl = options.fetchImpl || globalThis.fetch;
+  if (typeof fetchImpl !== 'function') throw new Error('This Node.js runtime does not provide fetch()');
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs || MEDIA_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetchImpl(sourceUrl, {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'user-agent': 'MoZhu_Blog content sync' },
+    });
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error(`media download timed out after ${options.timeoutMs || MEDIA_TIMEOUT_MS}ms`);
+    throw new Error(`media download failed: ${error.message}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) throw new Error(`media download returned HTTP ${response.status}`);
+  if (!sanitizeUrl(response.url || sourceUrl, MEDIA_PROTOCOLS)) {
+    throw new Error('media download redirected to a disallowed protocol');
+  }
+
+  const contentType = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  const extension = IMAGE_EXTENSIONS.get(contentType);
+  if (!extension) {
+    throw new Error(`unsupported image Content-Type "${contentType || 'missing'}"`);
+  }
+
+  const maxBytes = options.maxBytes || MAX_MEDIA_BYTES;
+  const declaredLength = Number.parseInt(response.headers.get('content-length') || '0', 10);
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new Error(`image exceeds ${maxBytes} byte limit`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > maxBytes) throw new Error(`image exceeds ${maxBytes} byte limit`);
+
+  const hash = sha256(buffer);
+  const fileName = `${hash}.${extension}`;
+  const publicPath = `../media/${fileName}`;
+  if (!mediaStore.files.has(fileName)) {
+    mediaStore.files.set(fileName, { buffer, contentType, hash, fileName });
+  }
+  mediaStore.bySourceUrl.set(sourceUrl, publicPath);
+  return publicPath;
+}
+
+function unsupportedBlockComment(type, context) {
+  incrementCounter(context.unsupportedCounts, type);
+  return `<!-- unsupported notion block: ${type} -->`;
 }
 
 function normalizeParagraph(text) {
   return text.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function imageUrlFromBlock(block) {
-  if (block.type !== 'image') return '';
-  if (block.image.type === 'external') return block.image.external.url;
-  if (block.image.type === 'file') return block.image.file.url;
-  return '';
+function normalizeGeneratedExcerpt(value) {
+  return String(value || '')
+    .replace(/^\s*(?:摘要|摘要内容|summary)\s*[:：]\s*/i, '')
+    .replace(/^\s*["“]|["”]\s*$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function recordUnsupported(unsupportedCounts, type) {
-  unsupportedCounts.set(type, (unsupportedCounts.get(type) || 0) + 1);
+async function generateSmartExcerpt(article, options = {}) {
+  const token = options.token || process.env.AI_SUMMARY_TOKEN || process.env.GITHUB_TOKEN;
+  if (!token) {
+    throw new Error('Excerpt is empty and AI_SUMMARY_TOKEN is unavailable; provide an Excerpt or enable AI summary generation.');
+  }
+
+  const fetchImpl = options.fetchImpl || fetch;
+  const model = options.model || AI_SUMMARY_MODEL;
+  const source = String(article.body || '').slice(0, AI_SUMMARY_SOURCE_LIMIT);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs || 30_000);
+  let response;
+  try {
+    response = await fetchImpl(options.endpoint || AI_SUMMARY_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-GitHub-Api-Version': '2026-03-10',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content: '你是中文个人博客的编辑。请对文章进行理解后重写摘要，不要直接复制开头或拼接原文句子。',
+          },
+          {
+            role: 'user',
+            content: [
+              `文章标题：${article.title}`,
+              '',
+              '文章正文：',
+              source,
+              '',
+              '请用与文章相同的语言生成 60–120 字的单段摘要，概括主题、关键方法或经验以及主要价值。不要使用 Markdown、引号、标题或“本文”之类的开场白，只输出摘要正文。',
+            ].join('\n'),
+          },
+        ],
+        temperature: 0.2,
+        max_tokens: 180,
+        seed: 430,
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    throw new Error(`AI summary request failed with HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  const excerpt = normalizeGeneratedExcerpt(payload.choices?.[0]?.message?.content);
+  if (Array.from(excerpt).length < 20) {
+    throw new Error('AI summary response was empty or too short');
+  }
+  return excerpt;
 }
 
-function unsupportedBlockComment(type, unsupportedCounts) {
-  recordUnsupported(unsupportedCounts, type);
-  return `<!-- unsupported notion block: ${type} -->`;
-}
-
-function renderChildren(children, context, depth = 0) {
-  const chunks = [];
-
-  children.forEach((child) => {
-    const rendered = renderBlock(child, context, depth);
-    if (rendered) chunks.push(rendered);
+async function writeExcerptToNotion(client, pageId, excerpt) {
+  await client.pages.update({
+    page_id: pageId,
+    properties: {
+      Excerpt: {
+        rich_text: [{ type: 'text', text: { content: excerpt } }],
+      },
+    },
   });
+}
 
+function prefixLines(value, prefix) {
+  return String(value || '').split('\n').map((line) => `${prefix}${line}`).join('\n');
+}
+
+async function renderChildren(children, context, depth = 0) {
+  const chunks = [];
+  for (const child of children || []) {
+    const rendered = await renderBlock(child, context, depth);
+    if (rendered) chunks.push(rendered);
+  }
   return chunks.join('\n\n').trim();
 }
 
-function renderBlock(block, context, depth = 0) {
+async function renderBlock(block, context, depth = 0) {
   const indent = '  '.repeat(depth);
-
   switch (block.type) {
     case 'paragraph':
-      return normalizeParagraph(richTextToMarkdown(block.paragraph.rich_text));
+      return normalizeParagraph(richTextToMarkdown(block.paragraph.rich_text, context));
     case 'heading_1':
-      return `# ${richTextToMarkdown(block.heading_1.rich_text)}`;
+      return `# ${richTextToMarkdown(block.heading_1.rich_text, context)}`;
     case 'heading_2':
-      return `## ${richTextToMarkdown(block.heading_2.rich_text)}`;
+      return `## ${richTextToMarkdown(block.heading_2.rich_text, context)}`;
     case 'heading_3':
-      return `### ${richTextToMarkdown(block.heading_3.rich_text)}`;
+      return `### ${richTextToMarkdown(block.heading_3.rich_text, context)}`;
     case 'quote':
-      return `> ${richTextToMarkdown(block.quote.rich_text)}`;
+      return prefixLines(richTextToMarkdown(block.quote.rich_text, context), '> ');
     case 'divider':
       return '---';
     case 'code': {
-      const language = block.code.language && block.code.language !== 'plain text'
-        ? block.code.language
-        : '';
-      return `\`\`\`${language}\n${richTextToMarkdown(block.code.rich_text)}\n\`\`\``;
+      const rawLanguage = block.code.language && block.code.language !== 'plain text' ? block.code.language : '';
+      const language = /^[a-z0-9_+.-]+$/i.test(rawLanguage) ? rawLanguage : '';
+      const code = plainTextFromRichText(block.code.rich_text);
+      const fence = codeFence(code);
+      return `${fence}${language}\n${code}\n${fence}`;
     }
     case 'callout': {
-      const calloutText = normalizeParagraph(richTextToMarkdown(block.callout.rich_text));
-      return `> ${calloutText || 'Callout'}`;
+      const text = normalizeParagraph(richTextToMarkdown(block.callout.rich_text, context));
+      return prefixLines(text || 'Callout', '> ');
     }
     case 'image': {
-      const alt = richTextToMarkdown(block.image.caption) || 'image';
-      const url = imageUrlFromBlock(block);
-      return url ? `![${alt}](${url})` : unsupportedBlockComment('image', context.unsupportedCounts);
+      const source = imageSourceFromBlock(block);
+      const alt = escapeImageAlt(plainTextFromRichText(block.image.caption) || 'image');
+      if (!source) return unsupportedBlockComment('image_missing_source', context);
+
+      if (source.kind === 'notion-file') {
+        const localPath = await downloadNotionImage(source.url, context.mediaStore);
+        return `![${alt}](${markdownDestination(localPath)})`;
+      }
+
+      const safeUrl = sanitizeUrl(source.url, MEDIA_PROTOCOLS);
+      if (!safeUrl) {
+        incrementCounter(context.unsafeUrlCounts, 'image');
+        return unsupportedBlockComment('image_unsafe_url', context);
+      }
+      return `![${alt}](${markdownDestination(safeUrl)})`;
     }
     case 'bookmark':
-      return block.bookmark.url ? `[${block.bookmark.url}](${block.bookmark.url})` : unsupportedBlockComment('bookmark', context.unsupportedCounts);
-    case 'link_preview':
-      return block.link_preview.url ? `[${block.link_preview.url}](${block.link_preview.url})` : unsupportedBlockComment('link_preview', context.unsupportedCounts);
+    case 'link_preview': {
+      const url = block[block.type]?.url;
+      const safeUrl = sanitizeUrl(url, LINK_PROTOCOLS);
+      if (!safeUrl) {
+        incrementCounter(context.unsafeUrlCounts, block.type);
+        return unsupportedBlockComment(`${block.type}_unsafe_url`, context);
+      }
+      return `[${escapeMarkdownText(safeUrl)}](${markdownDestination(safeUrl)})`;
+    }
     case 'bulleted_list_item': {
-      const text = richTextToMarkdown(block.bulleted_list_item.rich_text) || ' ';
-      const childText = renderChildren(block.children || [], context, depth + 1);
+      const text = richTextToMarkdown(block.bulleted_list_item.rich_text, context) || ' ';
+      const childText = await renderChildren(block.children, context, depth + 1);
       return [`${indent}- ${text}`, childText].filter(Boolean).join('\n');
     }
     case 'numbered_list_item': {
-      const text = richTextToMarkdown(block.numbered_list_item.rich_text) || ' ';
-      const childText = renderChildren(block.children || [], context, depth + 1);
+      const text = richTextToMarkdown(block.numbered_list_item.rich_text, context) || ' ';
+      const childText = await renderChildren(block.children, context, depth + 1);
       return [`${indent}1. ${text}`, childText].filter(Boolean).join('\n');
     }
-    case 'toggle': {
-      const summary = richTextToMarkdown(block.toggle.rich_text) || '详情';
-      const childText = renderChildren(block.children || [], context, depth + 1);
-      if (!childText) {
-        return `<details>\n<summary>${summary}</summary>\n</details>`;
-      }
-      return `<details>\n<summary>${summary}</summary>\n\n${childText}\n</details>`;
+    case 'to_do': {
+      const checked = block.to_do.checked ? 'x' : ' ';
+      const text = richTextToMarkdown(block.to_do.rich_text, context) || ' ';
+      const childText = await renderChildren(block.children, context, depth + 1);
+      return [`${indent}- [${checked}] ${text}`, childText].filter(Boolean).join('\n');
     }
-    case 'equation':
-      if (block.equation?.expression) {
-        return `$$\n${block.equation.expression}\n$$`;
-      }
-      return unsupportedBlockComment('equation', context.unsupportedCounts);
-    case 'table':
-    case 'table_row':
-    case 'column_list':
-    case 'column':
-    case 'synced_block':
-    case 'embed':
-    case 'pdf':
-    case 'file':
-    case 'audio':
-    case 'video': {
-      const comment = unsupportedBlockComment(block.type, context.unsupportedCounts);
-      const childText = renderChildren(block.children || [], context, depth + 1);
-      return [comment, childText].filter(Boolean).join('\n');
+    case 'toggle': {
+      const summary = richTextToMarkdown(block.toggle.rich_text, context) || '详情';
+      const childText = await renderChildren(block.children, context, depth + 1);
+      return [`**${summary}**`, childText].filter(Boolean).join('\n\n');
+    }
+    case 'equation': {
+      const expression = escapeHtml(block.equation?.expression || '');
+      if (!expression) return unsupportedBlockComment('equation_empty', context);
+      return `$$\n${expression}\n$$`;
     }
     default: {
-      if (UNSUPPORTED_FALLBACK_TYPES.has(block.type)) {
-        const comment = unsupportedBlockComment(block.type, context.unsupportedCounts);
-        const childText = renderChildren(block.children || [], context, depth + 1);
-        return [comment, childText].filter(Boolean).join('\n');
-      }
-      return unsupportedBlockComment(block.type, context.unsupportedCounts);
+      const comment = unsupportedBlockComment(block.type || 'unknown', context);
+      const childText = await renderChildren(block.children, context, depth + 1);
+      return [comment, childText].filter(Boolean).join('\n\n');
     }
   }
 }
 
-function buildMarkdown(meta, blocks, context) {
-  const body = renderChildren(blocks, context).trim();
-  const frontmatter = serializeFrontmatter(meta);
-  return `${frontmatter}${body}${body ? '\n' : ''}`;
+async function materializeCover(coverSource, mediaStore) {
+  if (!coverSource) return '';
+  if (coverSource.kind === 'notion-file') {
+    return downloadNotionImage(coverSource.url, mediaStore);
+  }
+
+  const safeUrl = sanitizeUrl(coverSource.url, MEDIA_PROTOCOLS);
+  if (!safeUrl) throw new Error('cover URL does not use an allowed HTTP(S) protocol');
+  return safeUrl;
 }
 
-function readLocalPostFiles() {
-  return fs.readdirSync(POSTS_DIR)
-    .filter((name) => name.endsWith('.md'))
-    .sort()
-    .map((name) => {
-      const filePath = path.join(POSTS_DIR, name);
-      const parsed = matter(fs.readFileSync(filePath, 'utf8'));
-      return {
-        name,
-        slug: name.replace(/\.md$/, ''),
-        filePath,
-        notionId: parsed.data.notionId ? String(parsed.data.notionId) : '',
-        frontmatter: parsed.data,
-      };
-    });
-}
-
-function buildLocalNotionMap(localPosts) {
-  const notionMap = new Map();
-
-  localPosts.forEach((post) => {
-    if (!post.notionId) return;
-
-    if (notionMap.has(post.notionId)) {
-      const existing = notionMap.get(post.notionId);
-      throw new Error(
-        `Invalid local state: notionId=${post.notionId} appears in both "${existing.name}" and "${post.name}".`
-      );
+async function buildArticle(client, article, context) {
+  const [blocks, cover] = await Promise.all([
+    fetchBlockChildren(client, article.notionId),
+    materializeCover(article.coverSource, context.mediaStore),
+  ]);
+  const body = (await renderChildren(blocks, context)).trim();
+  if (!body) throw new Error('article body is empty');
+  let excerpt = article.excerpt;
+  if (!excerpt) {
+    excerpt = await context.generateSummary({ ...article, body });
+    context.summaryCount += 1;
+    if (context.writeSummary) {
+      try {
+        await context.writeSummary(article.notionId, excerpt);
+        context.summaryWritebackCount += 1;
+      } catch (error) {
+        context.summaryWritebackErrors.push(
+          `Page ${maskId(article.notionId)}: AI summary was generated but Excerpt writeback failed: ${error.message}`
+        );
+      }
     }
-
-    notionMap.set(post.notionId, post);
-  });
-
-  return notionMap;
+  }
+  const normalizedArticle = {
+    ...article,
+    excerpt,
+    cover,
+  };
+  delete normalizedArticle.coverSource;
+  const markdown = `${serializeFrontmatter(normalizedArticle)}${body}${body ? '\n' : ''}`;
+  return {
+    ...normalizedArticle,
+    markdown,
+    hash: sha256(markdown),
+    path: `posts/${normalizedArticle.slug}.md`,
+  };
 }
 
-function detectRemoteSlugConflicts(metas) {
-  const bySlug = new Map();
-
-  metas.forEach((meta) => {
-    const list = bySlug.get(meta.slug) || [];
-    list.push(meta);
-    bySlug.set(meta.slug, list);
-  });
-
-  const conflicts = [];
-  bySlug.forEach((entries, slug) => {
-    if (entries.length > 1) {
-      conflicts.push({ slug, entries });
-    }
-  });
-
-  return conflicts;
-}
-
-function describeRemoteSlugConflicts(conflicts) {
-  return conflicts.map((conflict) => {
-    const details = conflict.entries
-      .map((entry) => `title="${entry.title}", notionId=${entry.notionId}`)
-      .join(' | ');
-    return `Slug conflict "${conflict.slug}": ${details}`;
-  });
-}
-
-function planWriteOperations(metas, localPosts) {
-  const localByFileName = new Map(localPosts.map((post) => [post.name, post]));
+async function buildSnapshot(client, articles, options = {}) {
+  const context = {
+    mediaStore: createMediaStore(),
+    unsupportedCounts: new Map(),
+    unsafeUrlCounts: new Map(),
+    summaryCount: 0,
+    summaryWritebackCount: 0,
+    summaryWritebackErrors: [],
+    generateSummary: options.generateSummary || ((article) => generateSmartExcerpt(article)),
+    writeSummary: options.writeSummary
+      || (AI_SUMMARY_WRITEBACK && !DRY_RUN
+        ? (pageId, excerpt) => writeExcerptToNotion(client, pageId, excerpt)
+        : null),
+  };
+  const builtArticles = [];
   const errors = [];
-  const warnings = [];
-  const operations = [];
 
-  metas.forEach((meta) => {
-    const fileName = `${meta.slug}.md`;
-    const existing = localByFileName.get(fileName);
-
-    if (!existing) {
-      operations.push({
-        type: 'create',
-        slug: meta.slug,
-        notionId: meta.notionId,
-        filePath: path.join(POSTS_DIR, fileName),
-        meta,
-      });
-      return;
+  for (const article of articles) {
+    try {
+      builtArticles.push(await buildArticle(client, article, context));
+    } catch (error) {
+      errors.push(`Page ${maskId(article.notionId)}: content export failed: ${error.message}`);
     }
+  }
 
-    if (!existing.notionId) {
-      warnings.push(`Skipping Notion page "${meta.title}" because local manual post "${fileName}" has no notionId.`);
-      return;
-    }
+  builtArticles.sort((left, right) => right.date.localeCompare(left.date) || left.slug.localeCompare(right.slug));
+  return { ...context, articles: builtArticles, errors };
+}
 
-    if (existing.notionId !== meta.notionId) {
-      errors.push(
-        `Slug conflict for "${meta.slug}": local file "${fileName}" is bound to notionId=${existing.notionId}, current page notionId=${meta.notionId}.`
-      );
-      return;
-    }
+function createManifest(snapshot) {
+  const media = [...snapshot.mediaStore.files.values()]
+    .map((file) => ({
+      path: `media/${file.fileName}`,
+      hash: file.hash,
+      bytes: file.buffer.length,
+      contentType: file.contentType,
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
 
-    operations.push({
-      type: 'update',
-      slug: meta.slug,
-      notionId: meta.notionId,
-      filePath: existing.filePath,
-      meta,
+  return {
+    schemaVersion: 1,
+    source: 'notion',
+    generatedAt: new Date().toISOString(),
+    count: snapshot.articles.length,
+    mediaCount: media.length,
+    articles: snapshot.articles.map((article) => ({
+      id: article.notionId,
+      notionId: article.notionId,
+      slug: article.slug,
+      aliases: article.aliases,
+      hash: article.hash,
+      updatedAt: article.updatedAt,
+      path: article.path,
+    })),
+    media,
+  };
+}
+
+function writeSnapshot(contentDir, snapshot, manifest) {
+  const parentDir = path.dirname(contentDir);
+  fs.mkdirSync(parentDir, { recursive: true });
+  const stageDir = fs.mkdtempSync(path.join(parentDir, `.${path.basename(contentDir)}-stage-`));
+  const backupDir = path.join(parentDir, `.${path.basename(contentDir)}-backup-${process.pid}-${Date.now()}`);
+  let movedExisting = false;
+  let promoted = false;
+
+  try {
+    const postsDir = path.join(stageDir, 'posts');
+    const mediaDir = path.join(stageDir, 'media');
+    fs.mkdirSync(postsDir, { recursive: true });
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    snapshot.articles.forEach((article) => {
+      fs.writeFileSync(path.join(stageDir, article.path), article.markdown, 'utf8');
     });
-  });
-
-  return { operations, errors, warnings };
-}
-
-function planRenameOperations(metas, localPosts) {
-  const localByNotionId = buildLocalNotionMap(localPosts);
-  const localByFileName = new Map(localPosts.map((post) => [post.name, post]));
-  const operations = [];
-
-  metas.forEach((meta) => {
-    const localPost = localByNotionId.get(meta.notionId);
-    if (!localPost) return;
-    if (localPost.slug === meta.slug) return;
-
-    const targetName = `${meta.slug}.md`;
-    const targetPath = path.join(POSTS_DIR, targetName);
-    const existingTarget = localByFileName.get(targetName);
-
-    if (existingTarget && existingTarget.notionId !== meta.notionId) {
-      const label = existingTarget.notionId
-        ? `notionId=${existingTarget.notionId}`
-        : 'manual post';
-      throw new Error(
-        `Cannot rename "${localPost.name}" to "${targetName}" because target already exists (${label}).`
-      );
-    }
-
-    operations.push({
-      type: 'rename',
-      notionId: meta.notionId,
-      oldSlug: localPost.slug,
-      newSlug: meta.slug,
-      oldFilePath: localPost.filePath,
-      newFilePath: targetPath,
-      oldName: localPost.name,
-      newName: targetName,
+    snapshot.mediaStore.files.forEach((file) => {
+      fs.writeFileSync(path.join(mediaDir, file.fileName), file.buffer);
     });
-  });
+    fs.writeFileSync(path.join(stageDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
-  return operations;
+    if (fs.existsSync(contentDir)) {
+      fs.renameSync(contentDir, backupDir);
+      movedExisting = true;
+    }
+    fs.renameSync(stageDir, contentDir);
+    promoted = true;
+
+    if (movedExisting) {
+      try {
+        fs.rmSync(backupDir, { recursive: true, force: true });
+      } catch (error) {
+        console.warn(`Snapshot published, but old snapshot cleanup failed: ${error.message}`);
+      }
+    }
+  } catch (error) {
+    if (!promoted && movedExisting && !fs.existsSync(contentDir) && fs.existsSync(backupDir)) {
+      fs.renameSync(backupDir, contentDir);
+    }
+    throw error;
+  } finally {
+    if (fs.existsSync(stageDir)) fs.rmSync(stageDir, { recursive: true, force: true });
+  }
 }
 
-function applyRenamePlanToLocalPosts(localPosts, renameOperations) {
-  const renamedByNotionId = new Map(renameOperations.map((operation) => [operation.notionId, operation]));
-
-  return localPosts.map((post) => {
-    const rename = renamedByNotionId.get(post.notionId);
-    if (!rename) return post;
-
-    return {
-      ...post,
-      name: rename.newName,
-      slug: rename.newSlug,
-      filePath: rename.newFilePath,
-    };
-  });
-}
-
-function planDeleteOperations(localPosts, publishedNotionIds) {
-  return localPosts
-    .filter((post) => post.notionId && !publishedNotionIds.has(post.notionId))
-    .map((post) => ({
-      type: 'delete',
-      slug: post.slug,
-      notionId: post.notionId,
-      filePath: post.filePath,
-    }));
-}
-
-function printUnsupportedSummary(unsupportedCounts) {
-  if (unsupportedCounts.size === 0) {
-    console.log('Unsupported block summary: none');
+function printCounterSummary(label, counter) {
+  if (counter.size === 0) {
+    console.log(`${label}: none`);
     return;
   }
-
-  console.log('Unsupported block summary:');
-  Array.from(unsupportedCounts.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .forEach(([type, count]) => {
-      console.log(`- ${type}: ${count}`);
-    });
+  const summary = [...counter.entries()]
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([key, count]) => `${key}=${count}`)
+    .join(', ');
+  console.log(`${label}: ${summary}`);
 }
 
-async function buildWritePayloads(client, operations, unsupportedCounts) {
-  const payloads = [];
-
-  for (const operation of operations) {
-    const blocks = await fetchBlockChildren(client, operation.notionId);
-    const markdown = buildMarkdown(operation.meta, blocks, { unsupportedCounts });
-    payloads.push({ ...operation, markdown });
-  }
-
-  return payloads;
-}
-
-function executeOperations(renameOperations, writeOperations, deleteOperations) {
-  const stats = {
-    renamed: 0,
-    created: 0,
-    updated: 0,
-    deleted: 0,
-  };
-
-  renameOperations.forEach((operation) => {
-    stats.renamed += 1;
-
-    if (DRY_RUN) {
-      console.log(`[dry-run] rename: ${operation.oldName} → ${operation.newName}`);
-      return;
-    }
-
-    fs.renameSync(operation.oldFilePath, operation.newFilePath);
-    console.log(`Renamed: ${operation.oldName} → ${operation.newName}`);
-  });
-
-  writeOperations.forEach((operation) => {
-    if (operation.type === 'create') stats.created += 1;
-    if (operation.type === 'update') stats.updated += 1;
-
-    if (DRY_RUN) {
-      console.log(`[dry-run] ${operation.type}: ${path.basename(operation.filePath)}`);
-      return;
-    }
-
-    fs.writeFileSync(operation.filePath, operation.markdown, 'utf8');
-    console.log(`${operation.type === 'create' ? 'Created' : 'Updated'}: ${path.basename(operation.filePath)}`);
-  });
-
-  deleteOperations.forEach((operation) => {
-    stats.deleted += 1;
-
-    if (DRY_RUN) {
-      console.log(`[dry-run] delete: ${path.basename(operation.filePath)}`);
-      return;
-    }
-
-    fs.unlinkSync(operation.filePath);
-    console.log(`Deleted: ${path.basename(operation.filePath)}`);
-  });
-
-  return stats;
+function throwCollectedErrors(label, errors) {
+  if (errors.length === 0) return;
+  throw new Error(`${label} (${errors.length}):\n${errors.map((error) => `- ${error}`).join('\n')}`);
 }
 
 async function main() {
   ensureEnv();
-
-  console.log(`Starting Notion sync${DRY_RUN ? ' (dry-run)' : ''}...`);
-  console.log(`Delete sync: ${DELETE_NOTION_MANAGED ? 'enabled' : 'disabled'}`);
+  const contentDir = resolveContentDir();
+  const groupAllowlist = parseGroupAllowlist();
+  console.log(`Starting stateless Notion snapshot${DRY_RUN ? ' (dry-run)' : ''}...`);
+  console.log(`Content directory: ${contentDir}`);
+  console.log(`Group allowlist: ${groupAllowlist.join(', ')}`);
+  console.log(`Strict unsupported blocks: ${STRICT_UNSUPPORTED_BLOCKS ? 'enabled' : 'disabled'}`);
 
   const client = new Client({ auth: process.env.NOTION_TOKEN });
+  const database = await client.databases.retrieve({ database_id: process.env.NOTION_DATABASE_ID });
+  const databaseValidation = validateDatabaseSchema(database, { groupAllowlist });
+  databaseValidation.warnings.forEach((warning) => console.warn(`Schema warning: ${warning}`));
+  throwCollectedErrors('Database schema validation failed', databaseValidation.errors);
+
   const pages = await fetchDatabasePages(client);
-
   if (pages.length === 0 && !ALLOW_EMPTY_SYNC) {
-    fail('No published Notion pages found. Abort to protect local posts.');
+    throw new Error('No published Notion pages found. Set ALLOW_EMPTY_NOTION_SYNC=1 only for an intentional empty snapshot.');
   }
 
-  const metas = pages.map(extractPageMeta);
-  const remoteConflicts = detectRemoteSlugConflicts(metas);
-  if (remoteConflicts.length > 0) {
-    fail(describeRemoteSlugConflicts(remoteConflicts).join('\n'));
+  const pageValidation = validatePublishedPages(pages, { groupAllowlist });
+  throwCollectedErrors('Published content validation failed', pageValidation.errors);
+  console.log(`Published pages validated: ${pages.length}`);
+
+  const snapshot = await buildSnapshot(client, pageValidation.articles);
+  console.log(`AI summaries generated: ${snapshot.summaryCount}`);
+  console.log(`AI summaries written back to Notion: ${snapshot.summaryWritebackCount}`);
+  snapshot.summaryWritebackErrors.forEach((warning) => console.warn(`Summary cache warning: ${warning}`));
+  printCounterSummary('Unsupported block summary', snapshot.unsupportedCounts);
+  printCounterSummary('Blocked URL summary', snapshot.unsafeUrlCounts);
+  if (STRICT_UNSUPPORTED_BLOCKS && snapshot.unsupportedCounts.size > 0) {
+    snapshot.errors.push('Unsupported Notion blocks are present while STRICT_UNSUPPORTED_BLOCKS=1.');
+  }
+  throwCollectedErrors('Content snapshot generation failed', snapshot.errors);
+
+  const manifest = createManifest(snapshot);
+  if (DRY_RUN) {
+    console.log(`Dry run complete. articles=${manifest.count} media=${manifest.mediaCount} writes=0`);
+    return;
   }
 
-  const localPosts = readLocalPostFiles();
-  const plannedRenames = planRenameOperations(metas, localPosts);
-  const localPostsAfterRename = applyRenamePlanToLocalPosts(localPosts, plannedRenames);
-  const { operations: plannedWrites, errors: planningErrors, warnings: planningWarnings } = planWriteOperations(metas, localPostsAfterRename);
-  if (planningErrors.length > 0) {
-    fail(planningErrors.join('\n'));
-  }
-  planningWarnings.forEach((warning) => {
-    console.warn(warning);
-  });
-
-  const publishedNotionIds = new Set(metas.map((meta) => meta.notionId));
-  const plannedDeletes = DELETE_NOTION_MANAGED
-    ? planDeleteOperations(localPostsAfterRename, publishedNotionIds)
-    : [];
-
-  console.log(`Published pages: ${metas.length}`);
-  console.log(`Planned renames: ${plannedRenames.length}`);
-  console.log(`Planned writes: ${plannedWrites.length}`);
-  console.log(`Planned deletes: ${plannedDeletes.length}`);
-
-  if (plannedRenames.length > 0) {
-    console.log('Rename candidates:');
-    plannedRenames.forEach((operation) => {
-      console.log(`- ${operation.oldName} → ${operation.newName}`);
-    });
-  }
-
-  if (plannedDeletes.length > 0) {
-    console.log('Delete candidates:');
-    plannedDeletes.forEach((operation) => {
-      console.log(`- ${path.basename(operation.filePath)} (notionId=${operation.notionId})`);
-    });
-  }
-
-  const unsupportedCounts = new Map();
-  const writeOperations = await buildWritePayloads(client, plannedWrites, unsupportedCounts);
-  const stats = executeOperations(plannedRenames, writeOperations, plannedDeletes);
-
-  console.log(
-    `Sync complete${DRY_RUN ? ' (dry-run)' : ''}. renamed=${stats.renamed} created=${stats.created} updated=${stats.updated} deleted=${stats.deleted} dryRun=${DRY_RUN ? 1 : 0}`
-  );
-  if (plannedRenames.length > 0) {
-    console.log(`renamed: ${plannedRenames.length}`);
-    plannedRenames.forEach((operation) => {
-      console.log(`- ${operation.oldName} → ${operation.newName}`);
-    });
-  } else {
-    console.log('renamed: 0');
-  }
-  printUnsupportedSummary(unsupportedCounts);
+  writeSnapshot(contentDir, snapshot, manifest);
+  console.log(`Notion snapshot published. articles=${manifest.count} media=${manifest.mediaCount}`);
+  console.log(`Manifest: ${path.join(contentDir, 'manifest.json')}`);
 }
 
-main().catch((error) => {
-  console.error(`Notion sync failed: ${error.message}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`Notion sync failed: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  buildArticle,
+  buildSnapshot,
+  createManifest,
+  downloadNotionImage,
+  escapeMarkdownText,
+  generateSmartExcerpt,
+  normalizeGeneratedExcerpt,
+  renderBlock,
+  resolveContentDir,
+  richTextToMarkdown,
+  sanitizeUrl,
+  serializeFrontmatter,
+  writeSnapshot,
+};
